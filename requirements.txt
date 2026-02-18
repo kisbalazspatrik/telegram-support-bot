@@ -1,0 +1,4 @@
+python-telegram-bot>=21.0.0
+python-dotenv>=1.0.0
+# Optional: Only required if using DB_TYPE=POSTGRES
+psycopg2-binary>=2.9.0
