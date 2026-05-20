@@ -528,6 +528,39 @@ def resolve_ticket(ticket_number: int) -> bool:
         return False
 
 
+def cleanup_orphaned_tickets() -> int:
+    """Delete tickets that never got a real channel_id.
+
+    `create_ticket_channel` in ticket_manager.py inserts the row with
+    channel_id=0 as a placeholder before creating the forum topic, then updates
+    it. If the bot crashed between those two steps, the row sits with
+    channel_id=0. Because channel_id has a UNIQUE constraint, that single
+    orphan blocks ALL future ticket creation (the next placeholder INSERT
+    collides with it). Deleting orphans on startup unblocks the system. They
+    were never delivered to admins, so no information is lost.
+
+    Returns the number of orphan rows deleted.
+    """
+    db_type = _get_db_type()
+    placeholder = "%s" if db_type == "POSTGRES" else "?"
+
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"DELETE FROM tickets WHERE channel_id = {placeholder}",
+            (0,),
+        )
+        count = cursor.rowcount or 0
+        conn.commit()
+
+    if count:
+        logger.warning(
+            "Cleaned up %d orphaned ticket row(s) with placeholder channel_id=0",
+            count,
+        )
+    return count
+
+
 def sync_with_telegram(bot, admin_group_id: int) -> None:
     """
     Optional: Sync ticket counter with existing Telegram channels.

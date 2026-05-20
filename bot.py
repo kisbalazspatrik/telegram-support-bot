@@ -13,7 +13,7 @@ from telegram.ext import (
 from telegram.error import TelegramError
 
 from config import Config
-from persistence import init_database, close_connection_pool
+from persistence import init_database, close_connection_pool, cleanup_orphaned_tickets
 from ticket_manager import TicketManager
 from handlers import (
     handle_start_command,
@@ -47,11 +47,18 @@ async def post_init(application: Application) -> None:
     """Initialize bot data after application is created."""
     bot = application.bot
     admin_group_id = int(Config.ADMIN_GROUP_ID)
-    
+
+    # Clear any orphaned ticket rows left behind by a previous crash. Without
+    # this, a single orphan (channel_id=0) blocks new ticket creation forever.
+    try:
+        cleanup_orphaned_tickets()
+    except Exception as e:
+        logger.exception("Orphan-ticket cleanup failed: %s", e)
+
     # Initialize ticket manager
     ticket_manager = TicketManager(bot, admin_group_id)
     application.bot_data['ticket_manager'] = ticket_manager
-    
+
     logger.info("Bot initialized successfully")
     logger.info(f"Admin group ID: {admin_group_id}")
 
