@@ -1,5 +1,7 @@
 """Message and command handlers for the Telegram concierge bot."""
 import logging
+import time
+from typing import Dict, Tuple
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackQueryHandler
 from telegram.error import TelegramError
@@ -8,6 +10,42 @@ from ticket_manager import TicketManager
 from persistence import reopen_ticket, resolve_ticket, get_ticket_by_number, _get_db_type
 
 logger = logging.getLogger(__name__)
+
+
+# Per-user rate limit windows in seconds. Keys are action names used by _rate_limited().
+_RATE_LIMIT_WINDOW: Dict[str, float] = {
+    "newticket": 30.0,
+    "status": 5.0,
+    "close": 5.0,
+    "message": 1.5,
+}
+_RATE_LIMIT_MAX_ENTRIES = 10_000
+_rate_limit_last: Dict[Tuple[int, str], float] = {}
+
+
+def _rate_limited(user_id: int, action: str) -> float:
+    """Return seconds remaining until the user can perform `action`, or 0.0 if allowed.
+
+    Side effect: when allowed, the call is recorded so subsequent calls within the
+    window are blocked.
+    """
+    window = _RATE_LIMIT_WINDOW.get(action)
+    if not window:
+        return 0.0
+    now = time.monotonic()
+    key = (user_id, action)
+    last = _rate_limit_last.get(key, 0.0)
+    remaining = window - (now - last)
+    if remaining > 0:
+        return remaining
+    # Allow and record. Opportunistically evict if the dict has grown unreasonably.
+    if len(_rate_limit_last) >= _RATE_LIMIT_MAX_ENTRIES:
+        cutoff = now - max(_RATE_LIMIT_WINDOW.values())
+        for k, v in list(_rate_limit_last.items()):
+            if v < cutoff:
+                del _rate_limit_last[k]
+    _rate_limit_last[key] = now
+    return 0.0
 
 
 async def handle_start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -47,12 +85,19 @@ async def handle_new_ticket_command(update: Update, context: ContextTypes.DEFAUL
     """Handle /newticket command from users."""
     if not update.message or not update.message.from_user:
         return
-    
+
     user = update.message.from_user
     user_id = user.id
     username = user.username
     ticket_manager: TicketManager = context.bot_data['ticket_manager']
-    
+
+    wait = _rate_limited(user_id, "newticket")
+    if wait > 0:
+        await update.message.reply_text(
+            f"⏳ Please wait {int(wait) + 1}s before trying again."
+        )
+        return
+
     # Check if user already has an open ticket
     existing_ticket = ticket_manager.get_user_ticket(user_id)
     
@@ -81,7 +126,14 @@ async def handle_status_command(update: Update, context: ContextTypes.DEFAULT_TY
     user = update.message.from_user
     user_id = user.id
     ticket_manager: TicketManager = context.bot_data['ticket_manager']
-    
+
+    wait = _rate_limited(user_id, "status")
+    if wait > 0:
+        await update.message.reply_text(
+            f"⏳ Please wait {int(wait) + 1}s before trying again."
+        )
+        return
+
     # Get user's most recent ticket (open or closed)
     from persistence import get_db_connection
     
@@ -149,11 +201,18 @@ async def handle_user_close_command(update: Update, context: ContextTypes.DEFAUL
     """Handle /close command from users."""
     if not update.message or not update.message.from_user:
         return
-    
+
     user = update.message.from_user
     user_id = user.id
     ticket_manager: TicketManager = context.bot_data['ticket_manager']
-    
+
+    wait = _rate_limited(user_id, "close")
+    if wait > 0:
+        await update.message.reply_text(
+            f"⏳ Please wait {int(wait) + 1}s before trying again."
+        )
+        return
+
     # Get user's open ticket
     ticket = ticket_manager.get_user_ticket(user_id)
     
@@ -190,14 +249,24 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Handle messages from users (DMs to the bot)."""
     if not update.message or not update.message.from_user:
         return
-    
+
     user = update.message.from_user
     user_id = user.id
     username = user.username
     message_text = update.message.text or ""
-    
+
+    wait = _rate_limited(user_id, "message")
+    if wait > 0:
+        # Silent-ish rate limit on messages so we don't spam users mid-conversation.
+        # Drop the message but warn on the longer waits.
+        if wait > 1.0:
+            await update.message.reply_text(
+                "⏳ You're sending messages too fast. Please slow down a moment."
+            )
+        return
+
     ticket_manager: TicketManager = context.bot_data['ticket_manager']
-    
+
     # Check if user already has an open ticket
     existing_ticket = ticket_manager.get_user_ticket(user_id)
     
@@ -385,7 +454,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         user = query.from_user
         user_id = user.id
         username = user.username
-        
+
+        wait = _rate_limited(user_id, "newticket")
+        if wait > 0:
+            await query.edit_message_text(
+                f"⏳ Please wait {int(wait) + 1}s before trying again."
+            )
+            return
+
         # Check if user already has an open ticket
         existing_ticket = ticket_manager.get_user_ticket(user_id)
         
