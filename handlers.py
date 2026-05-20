@@ -354,10 +354,12 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = ticket['user_id']
     
     try:
+        # Relay admin text as plain text. Admins may type stray markdown chars
+        # (`*`, `_`, backticks, brackets) that would otherwise cause Telegram to
+        # reject the message and silently drop it on the user side.
         await context.bot.send_message(
             chat_id=user_id,
             text=message_text,
-            parse_mode='Markdown'
         )
     except TelegramError as e:
         error_code = getattr(e, 'message', '')
