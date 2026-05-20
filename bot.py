@@ -150,11 +150,16 @@ def main():
     # Start the bot with restart loop: if polling exits (e.g. network/API error), reconnect.
     # PTB installs its own SIGINT/SIGTERM handlers (via stop_signals) that stop polling and
     # return cleanly. We treat a clean return as "shutdown requested" and exit the loop;
-    # only exceptions trigger a reconnect.
+    # only exceptions trigger a reconnect, with exponential backoff so a sustained outage
+    # doesn't hammer the Telegram API.
     logger.info("Starting bot...")
-    restart_delay = 5
+    initial_delay = 5
+    max_delay = 300
+    healthy_threshold = 60  # polling that ran at least this long counts as healthy
+    restart_delay = initial_delay
     try:
         while True:
+            started = time.monotonic()
             try:
                 application.run_polling(
                     close_loop=False,
@@ -163,8 +168,13 @@ def main():
                 logger.info("Polling stopped cleanly (shutdown signal). Exiting.")
                 break
             except Exception as e:
+                ran_for = time.monotonic() - started
+                if ran_for > healthy_threshold:
+                    # Long-running session; treat this failure as fresh and reset backoff.
+                    restart_delay = initial_delay
                 logger.exception("Polling failed: %s; restarting in %ds...", e, restart_delay)
                 time.sleep(restart_delay)
+                restart_delay = min(int(restart_delay * 2), max_delay)
     finally:
         close_connection_pool()
         logger.info("Bot shutdown complete.")
