@@ -1,5 +1,6 @@
 """Database persistence layer for ticket management. Supports both SQLite (LOCAL) and PostgreSQL (POSTGRES)."""
 import logging
+import os
 from contextlib import contextmanager
 from typing import Optional, Dict, Any
 import datetime
@@ -8,7 +9,13 @@ logger = logging.getLogger(__name__)
 
 # Database-specific imports will be loaded lazily based on DB_TYPE
 _connection_pool: Optional[Any] = None
-DB_FILE = "tickets.db"
+
+# Resolve the SQLite DB path to an absolute path so the bot doesn't silently
+# create a fresh empty database when launched from a different working
+# directory. Override with DB_FILE env var if you want it elsewhere
+# (e.g. a mounted volume in production).
+_DEFAULT_DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tickets.db")
+DB_FILE = os.path.abspath(os.getenv("DB_FILE", _DEFAULT_DB_FILE))
 
 
 def _get_db_type():
