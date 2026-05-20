@@ -373,11 +373,14 @@ async def handle_admin_message(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             error_msg = f"⚠️ Could not deliver message to user. Error: {str(e)[:50]}"
         
-        # Try to notify admin that message couldn't be delivered
+        # Try to notify admin that message couldn't be delivered. If even this
+        # reply fails (network blip, message deleted), log and move on rather
+        # than letting the handler raise — but don't swallow KeyboardInterrupt
+        # or SystemExit.
         try:
             await update.message.reply_text(error_msg)
-        except:
-            pass
+        except TelegramError as reply_err:
+            logger.warning("Could not notify admin about delivery failure: %s", reply_err)
 
 
 async def handle_close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
