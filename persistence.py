@@ -73,6 +73,24 @@ def get_connection_pool():
     return _connection_pool
 
 
+def close_connection_pool() -> None:
+    """Close the PostgreSQL connection pool, if one was created.
+
+    Safe to call multiple times and safe to call when DB_TYPE=LOCAL (in which
+    case no pool exists). Intended for use in graceful-shutdown paths.
+    """
+    global _connection_pool
+    if _connection_pool is None:
+        return
+    try:
+        _connection_pool.closeall()
+        logger.info("PostgreSQL connection pool closed")
+    except Exception as e:
+        logger.warning("Error closing PostgreSQL connection pool: %s", e)
+    finally:
+        _connection_pool = None
+
+
 @contextmanager
 def get_db_connection():
     """Get a database connection with proper configuration."""

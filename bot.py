@@ -1,5 +1,6 @@
 """Main bot entry point"""
 import logging
+import signal
 import time
 from telegram.ext import (
     Application,
@@ -12,7 +13,7 @@ from telegram.ext import (
 from telegram.error import TelegramError
 
 from config import Config
-from persistence import init_database
+from persistence import init_database, close_connection_pool
 from ticket_manager import TicketManager
 from handlers import (
     handle_start_command,
@@ -146,16 +147,27 @@ def main():
         )
     )
     
-    # Start the bot with restart loop: if polling exits (e.g. network/API error), reconnect
+    # Start the bot with restart loop: if polling exits (e.g. network/API error), reconnect.
+    # PTB installs its own SIGINT/SIGTERM handlers (via stop_signals) that stop polling and
+    # return cleanly. We treat a clean return as "shutdown requested" and exit the loop;
+    # only exceptions trigger a reconnect.
     logger.info("Starting bot...")
     restart_delay = 5
-    while True:
-        try:
-            application.run_polling(close_loop=False)
-            logger.warning("Polling stopped; restarting in %ds...", restart_delay)
-        except Exception as e:
-            logger.exception("Polling failed: %s; restarting in %ds...", e, restart_delay)
-        time.sleep(restart_delay)
+    try:
+        while True:
+            try:
+                application.run_polling(
+                    close_loop=False,
+                    stop_signals=(signal.SIGINT, signal.SIGTERM),
+                )
+                logger.info("Polling stopped cleanly (shutdown signal). Exiting.")
+                break
+            except Exception as e:
+                logger.exception("Polling failed: %s; restarting in %ds...", e, restart_delay)
+                time.sleep(restart_delay)
+    finally:
+        close_connection_pool()
+        logger.info("Bot shutdown complete.")
 
 
 if __name__ == "__main__":
